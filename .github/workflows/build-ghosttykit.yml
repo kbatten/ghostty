@@ -34,14 +34,23 @@ jobs:
           cd macos
           tar czf GhosttyKit.xcframework.tar.gz GhosttyKit.xcframework/
 
-      # Bundle the themes + shell-integration scripts so Macterm can ship them
-      # in its own app bundle and resolve named themes / shell integration
-      # without a separate Ghostty.app install. The xcframework build installs
-      # these to zig-out/share/ghostty when -Demit-themes=true is set.
+      # Bundle the terminfo DB + themes + shell-integration scripts so Macterm
+      # can ship them in its own app bundle and resolve TERM=xterm-ghostty,
+      # named themes, and shell integration without a separate Ghostty.app
+      # install. The xcframework build installs themes/shell-integration to
+      # zig-out/share/ghostty (-Demit-themes=true) and the compiled terminfo
+      # tree to zig-out/share/terminfo (always built via `tic`). Stage all three
+      # at the tarball's top level so Macterm extracts them straight into its
+      # Resources dir and can point TERMINFO at terminfo/. Omitting terminfo
+      # breaks key input + TERM (see macterm issues #39/#40). Use -p/--copy so
+      # the terminfo symlinks (xterm-ghostty.tic aliases) survive.
       - name: Compress resources
         run: |
-          tar czf ghostty-resources.tar.gz \
-            -C zig-out/share/ghostty themes shell-integration
+          mkdir -p resources-stage
+          cp -R zig-out/share/ghostty/themes resources-stage/
+          cp -R zig-out/share/ghostty/shell-integration resources-stage/
+          cp -R zig-out/share/terminfo resources-stage/
+          tar czf ghostty-resources.tar.gz -C resources-stage .
 
       - name: Create release
         env:
