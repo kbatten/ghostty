@@ -34,23 +34,22 @@ jobs:
           cd macos
           tar czf GhosttyKit.xcframework.tar.gz GhosttyKit.xcframework/
 
-      # Bundle the terminfo DB + themes + shell-integration scripts so Macterm
-      # can ship them in its own app bundle and resolve TERM=xterm-ghostty,
-      # named themes, and shell integration without a separate Ghostty.app
-      # install. The xcframework build installs themes/shell-integration to
-      # zig-out/share/ghostty (-Demit-themes=true) and the compiled terminfo
-      # tree to zig-out/share/terminfo (always built via `tic`). Stage all three
-      # at the tarball's top level so Macterm extracts them straight into its
-      # Resources dir and can point TERMINFO at terminfo/. Omitting terminfo
-      # breaks key input + TERM (see macterm issues #39/#40). Use -p/--copy so
-      # the terminfo symlinks (xterm-ghostty.tic aliases) survive.
+      # Bundle the ghostty resources (themes + shell-integration under ghostty/,
+      # plus the compiled terminfo DB) so Macterm can ship them in its own app
+      # bundle and resolve TERM=xterm-ghostty, named themes, and shell
+      # integration without a separate Ghostty.app install. The build installs
+      # them to zig-out/share in the SAME layout a real Ghostty.app uses:
+      #   share/ghostty/{themes,shell-integration}   (-Demit-themes=true)
+      #   share/terminfo/78/xterm-ghostty            (compiled via tic, sibling)
+      # Tar zig-out/share verbatim so Macterm extracts it straight into
+      # Contents/Resources/, giving ghostty/ + a sibling terminfo/. libghostty
+      # derives TERMINFO as dirname(GHOSTTY_RESOURCES_DIR)/terminfo, so the
+      # terminfo dir MUST be a sibling of the ghostty/ resources dir — a flat
+      # layout breaks key input + TERM (macterm issues #39/#40). tar preserves
+      # the terminfo symlinks (xterm-ghostty aliases).
       - name: Compress resources
         run: |
-          mkdir -p resources-stage
-          cp -R zig-out/share/ghostty/themes resources-stage/
-          cp -R zig-out/share/ghostty/shell-integration resources-stage/
-          cp -R zig-out/share/terminfo resources-stage/
-          tar czf ghostty-resources.tar.gz -C resources-stage .
+          tar czf ghostty-resources.tar.gz -C zig-out/share ghostty terminfo
 
       - name: Create release
         env:
