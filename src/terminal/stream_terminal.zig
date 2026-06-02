@@ -679,8 +679,6 @@ pub const Handler = struct {
                     if (final.len > 3) self.writePty(final[0 .. final.len - 1 :0]);
                 }
             },
-
-            .glyph => {},
         }
     }
 };
