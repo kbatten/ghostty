@@ -24,7 +24,6 @@
 04cb
 0xdvc
 -4rh1t3ct0r7
-52dyd
 aalhendi
 aaron-ang
 abdurrahmanski
@@ -37,7 +36,6 @@ akimiojr
 alaasdk
 alanmoyano
 alaviss
-alexbathome
 alexfeijoo44
 alexjuca
 alosarjos
@@ -63,7 +61,6 @@ bleikurr
 bo2themax
 brentschroeter
 brianc442
-c0x0o
 cespare
 charliie-dev
 chernetskyi
@@ -130,7 +127,6 @@ illiakrauchanka
 j0hnm4r5
 jacobsandlund
 jake-stewart
-jamesarch
 jamylak
 jarred-sumner
 jcollie
@@ -176,7 +172,6 @@ markdorison
 markhuot
 marler8997
 marrocco-simone
-masterflitzer
 matkotiric
 mattn
 micaeljarniac
