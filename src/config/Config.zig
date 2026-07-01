@@ -752,12 +752,12 @@ foreground: Color = .{ .r = 0xFF, .g = 0xFF, .b = 0xFF },
 /// The null character (U+0000) is always treated as a boundary and does not
 /// need to be included in this configuration.
 ///
-/// Default: ``\t '"│`|:;,()[]{}<>$``
+/// Default: `` \t'"│`|:;,()[]{}<>$ ``
 ///
 /// To add or remove specific characters, you can set this to a custom value.
 /// For example, to treat semicolons as part of words:
 ///
-///     selection-word-chars = "\t '\"│`|:,()[]{}<>$"
+///     selection-word-chars = " \t'\"│`|:,()[]{}<>$"
 ///
 /// Available since: 1.3.0
 @"selection-word-chars": SelectionWordChars = .{},
@@ -1197,6 +1197,22 @@ command: ?Command = null,
 ///     name your binary appropriately or source the shell integration script
 ///     manually.
 @"initial-command": ?Command = null,
+
+/// A wrapper command that is prepended to the final command Ghostty would
+/// otherwise execute, after shell resolution, shell integration, and (on
+/// macOS) the `login(1)` wrapping have all been applied. The wrapper's
+/// arguments are placed before the resolved argv, so the resolved command
+/// runs as a child of the wrapper.
+///
+/// This exists so an embedder can run the shell under a supervisor such as a
+/// session-persistence multiplexer while keeping Ghostty's normal shell
+/// resolution and shell integration fully intact. Without this, an embedder
+/// would have to replace `command` with the wrapper, which loses the user's
+/// configured `command`, shell detection, and integration.
+///
+/// Specified like `command`, e.g. `direct:zmx attach my-session`. Use the
+/// `direct:` prefix to avoid a `/bin/sh -c` roundtrip for the wrapper.
+@"command-wrapper": ?Command = null,
 
 /// Controls when command finished notifications are sent. There are
 /// three options:
@@ -3656,14 +3672,6 @@ else
 /// If you set this to `false` then tabs will only take up space they need,
 /// which is the old style.
 @"gtk-wide-tabs": bool = true,
-
-/// If `true` (default), then two-finger horizontal scrolling on a touchpad
-/// will switch between tabs. Scrolling left goes to the next tab and
-/// scrolling right goes to the previous tab. Set this to `false` to
-/// disable this behavior.
-///
-/// Available since 1.4.0.
-@"gtk-horizontal-tab-scroll": bool = true,
 
 /// Custom CSS files to be loaded.
 ///
