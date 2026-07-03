@@ -24,7 +24,6 @@
 04cb
 0xdvc
 -4rh1t3ct0r7
-52dyd
 aalhendi
 aaron-ang
 abdurrahmanski
@@ -33,12 +32,10 @@ adrum
 agoodkind
 aindriu80
 ajiblock
-ajr-khll
 akimiojr
 alaasdk
 alanmoyano
 alaviss
-alexbathome
 alexfeijoo44
 alexjuca
 alosarjos
@@ -64,7 +61,6 @@ bleikurr
 bo2themax
 brentschroeter
 brianc442
-c0x0o
 cespare
 charliie-dev
 chernetskyi
@@ -103,8 +99,6 @@ ephemera
 -eric-assetpass Try talking, not botting
 eriksremess
 erral
-eunos-1128
-exlee
 -f1813483-netizen
 faukah
 filip7
@@ -133,7 +127,6 @@ illiakrauchanka
 j0hnm4r5
 jacobsandlund
 jake-stewart
-jamesarch
 jamylak
 jarred-sumner
 jcollie
@@ -160,7 +153,6 @@ kloneets
 knu
 -kody-w
 koranir
-kostich
 kristina8888
 kristofersoler
 kylesower
@@ -180,7 +172,6 @@ markdorison
 markhuot
 marler8997
 marrocco-simone
-masterflitzer
 matkotiric
 mattn
 micaeljarniac
@@ -202,14 +193,12 @@ mpatankar6
 mrconnorkenway
 mrmage
 mtak
-mustafa0x
 natesmyth
 neo773
 neurosnap
 nicholas-ochoa
 nicosuave
 nikicat
-nilsherzig
 nmggithub
 noib3
 nolinmcfarland
@@ -233,8 +222,6 @@ poweruser64
 prakhar54-byte
 priyans-hu
 puzza007
-qappell
-quinnypig
 qwerasd205
 raphamorim
 reo101
@@ -247,10 +234,8 @@ rmengelbrecht
 rmunn
 rockorager
 rpfaeffle
-sahilkmishra
 samasaur1
 sandydoo
--schickling-assistant NHITL
 secrus
 seruman
 seyoungjeong
@@ -273,14 +258,11 @@ unphased
 uzaaft
 vancluever
 vaughanandrews
--vectorpeak Stupid bot cosplaying as a maintainer
 viruslobster
 vlsi
 voidnv
-williamhcarter
 wyounas
 yabbal
-yak3d
 yamshta
 ydah
 -zaviro
