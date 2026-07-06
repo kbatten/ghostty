@@ -17,7 +17,6 @@ const modespkg = @import("modes.zig");
 const charsets = @import("charsets.zig");
 const csi = @import("csi.zig");
 const hyperlink = @import("hyperlink.zig");
-const glyph = @import("apc/glyph.zig");
 const kitty = @import("kitty.zig");
 const osc = @import("osc.zig");
 const point = @import("point.zig");
@@ -81,9 +80,6 @@ modes: modespkg.ModeState = .{},
 
 /// The most recently set mouse shape for the terminal.
 mouse_shape: mouse.Shape = .text,
-
-/// Per-session Glyph Protocol registrations.
-glyph_glossary: glyph.Glossary = .empty,
 
 /// These are just a packed set of flags we may set on the terminal.
 flags: packed struct {
@@ -169,11 +165,6 @@ pub const Dirty = packed struct {
 
     /// Set when the pre-edit is modified.
     preedit: bool = false,
-
-    /// Set when Glyph Protocol registrations may have changed. Registered
-    /// glyphs can affect already-visible PUA cells, so this requires a full
-    /// render-state rebuild.
-    glyph_glossary: bool = false,
 };
 
 /// Scrolling region is the area of the screen designated where scrolling
@@ -265,7 +256,6 @@ pub fn deinit(self: *Terminal, alloc: Allocator) void {
     self.screens.deinit(alloc);
     self.pwd.deinit(alloc);
     self.title.deinit(alloc);
-    self.glyph_glossary.deinit(alloc);
     self.* = undefined;
 }
 
@@ -406,8 +396,33 @@ pub fn print(self: *Terminal, c: u21) !void {
         // If we can NOT break, this means that "c" is part of a grapheme
         // with the previous char.
         if (!grapheme_break) {
-            switch (unicode.graphemeWidthEffect(previous_codepoint, c)) {
-                .ignore => return,
+            var desired_wide: enum { no_change, wide, narrow } = .no_change;
+
+            // If this is an emoji variation selector then we need to modify
+            // the cell width accordingly. VS16 makes the character wide and
+            // VS15 makes it narrow.
+            if (c == 0xFE0F or c == 0xFE0E) {
+                const prev_props = unicode.table.get(previous_codepoint);
+                // Check if it is a valid variation sequence in
+                // emoji-variation-sequences.txt, and if not, ignore the char.
+                if (!prev_props.emoji_vs_base) return;
+
+                switch (c) {
+                    0xFE0F => desired_wide = .wide,
+                    0xFE0E => desired_wide = .narrow,
+                    else => unreachable,
+                }
+            } else if (!unicode.table.get(c).width_zero_in_grapheme) {
+                // If we have a code point that contributes to the width of a
+                // grapheme, it necessarily means that we're at least at width
+                // 2, since the first code point must be at least width 1 to
+                // start. (Note that Prepend code points could effectively mean
+                // the first code point should be width 0, but we don't handle
+                // that yet.)
+                desired_wide = .wide;
+            }
+
+            switch (desired_wide) {
                 .wide => wide: {
                     if (prev.cell.wide == .wide) break :wide;
 
@@ -524,7 +539,7 @@ pub fn print(self: *Terminal, c: u21) !void {
                     break :narrow;
                 },
 
-                .no_change => {},
+                else => {},
             }
 
             log.debug("c={X} grapheme attach to left={} primary_cp={X}", .{
@@ -1201,8 +1216,10 @@ pub fn semanticPrompt(
                 // within a prompt area to SGR mouse events and defers to the
                 // shell to handle them.
                 if (cmd.readOption(.click_events)) |v| {
-                    screen.semantic_prompt.click = .{ .click_events = v };
-                    break :click;
+                    if (v) {
+                        screen.semantic_prompt.click = .click_events;
+                        break :click;
+                    }
                 }
 
                 // If click_events was not set or disabled, fallback to `cl`.
@@ -1714,18 +1731,10 @@ pub const ScrollViewport = union(Tag) {
     /// Scroll by some delta amount, up is negative.
     delta: isize,
 
-    /// Scroll to the given absolute row offset from the top of the
-    /// scrollable area. A value of zero is the top row. The requested
-    /// row becomes the first visible row of the viewport, clamped so
-    /// the viewport never scrolls beyond the top of the active area.
-    /// This is the same row space as PageList.Scrollbar offset.
-    row: usize,
-
     pub const Tag = lib.Enum(lib.target, &.{
         "top",
         "bottom",
         "delta",
-        "row",
     });
 
     const c_union = lib.TaggedUnion(
@@ -1746,7 +1755,6 @@ pub fn scrollViewport(self: *Terminal, behavior: ScrollViewport) void {
         .top => .{ .top = {} },
         .bottom => .{ .active = {} },
         .delta => |delta| .{ .delta_row = delta },
-        .row => |row| .{ .row = row },
     });
 }
 
@@ -2712,22 +2720,6 @@ pub fn kittyGraphics(
     return kitty.graphics.execute(alloc, self, cmd);
 }
 
-/// Execute a Glyph Protocol APC command against this terminal's per-session
-/// glossary. The returned response, if any, should be sent back to the pty as
-/// a complete APC sequence via `Response.formatWire`.
-pub fn glyphProtocol(
-    self: *Terminal,
-    alloc: Allocator,
-    req: *const glyph.Request,
-) ?glyph.Response {
-    const resp = glyph.execute(alloc, &self.glyph_glossary, req);
-    switch (req.*) {
-        .register, .clear => self.flags.dirty.glyph_glossary = true,
-        .support, .query => {},
-    }
-    return resp;
-}
-
 /// Set the storage size limit for Kitty graphics across all screens.
 pub fn setKittyGraphicsSizeLimit(
     self: *Terminal,
@@ -3179,7 +3171,6 @@ pub fn fullReset(self: *Terminal) void {
     self.previous_char = null;
     self.pwd.clearRetainingCapacity();
     self.title.clearRetainingCapacity();
-    self.glyph_glossary.clearAndFree(self.gpa());
     self.status_display = .main;
     self.scrolling_region = .{
         .top = 0,
@@ -3663,44 +3654,6 @@ test "Terminal: print multicodepoint grapheme, disabled mode 2027" {
     }
 
     try testing.expect(t.isDirty(.{ .screen = .{ .x = 0, .y = 0 } }));
-}
-
-// Terminal.print receives one codepoint at a time, so it can't use
-// unicode.graphemeWidth directly; that API requires a complete buffered
-// cluster or string end. This keeps the streaming printer's cursor advance
-// in sync with the buffered measurement API for representative clusters.
-fn expectGraphemeWidthParity(cps: []const u21) !void {
-    var t = try init(testing.allocator, .{ .cols = 80, .rows = 5 });
-    defer t.deinit(testing.allocator);
-
-    t.modes.set(.grapheme_cluster, true);
-
-    var expected: usize = 0;
-    var i: usize = 0;
-    while (i < cps.len) {
-        const result = unicode.graphemeWidth(u21, cps[i..]);
-        try testing.expect(result.len > 0);
-        i += result.len;
-        expected += result.width;
-    }
-
-    for (cps) |cp| try t.print(cp);
-    try testing.expectEqual(@as(usize, 0), t.screens.active.cursor.y);
-    try testing.expectEqual(expected, t.screens.active.cursor.x);
-}
-
-test "Terminal: graphemeWidth parity" {
-    try expectGraphemeWidthParity(&.{ 0x2764, 0xFE0F });
-    try expectGraphemeWidthParity(&.{ 'x', 0xFE0F, 0xFE0F });
-    try expectGraphemeWidthParity(&.{ 0x231A, 0xFE0E, 0xFE0F });
-    try expectGraphemeWidthParity(&.{ 0x1F3F4, 0x200D, 0x2620, 0xFE0F });
-    try expectGraphemeWidthParity(&.{ 0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F467 });
-    try expectGraphemeWidthParity(&.{ 0x23, 0xFE0F, 0x20E3 });
-    try expectGraphemeWidthParity(&.{ '1', 0x20E3 });
-    try expectGraphemeWidthParity(&.{ 0x1F44B, 0x1F3FF });
-    try expectGraphemeWidthParity(&.{ 0x1F1E6, 0x1F1E7, 0x1F1E8 });
-    try expectGraphemeWidthParity(&.{ 'a', 'b' });
-    try expectGraphemeWidthParity(&.{ 0x0301, 0x0302 });
 }
 
 test "Terminal: VS16 doesn't make character with 2027 disabled" {
@@ -12441,24 +12394,7 @@ test "Terminal: OSC133A click_events=1 sets click to click_events" {
         .options_unvalidated = "click_events=1",
     });
 
-    try testing.expectEqual(Screen.SemanticPrompt.SemanticClick{ .click_events = .absolute }, t.screens.active.semantic_prompt.click);
-}
-
-test "Terminal: OSC133A click_events=2 sets click to click_events (relative)" {
-    const alloc = testing.allocator;
-    var t = try init(alloc, .{ .cols = 10, .rows = 5 });
-    defer t.deinit(alloc);
-
-    // Verify default state is none
-    try testing.expectEqual(.none, t.screens.active.semantic_prompt.click);
-
-    // OSC 133;A with click_events=2
-    try t.semanticPrompt(.{
-        .action = .fresh_line_new_prompt,
-        .options_unvalidated = "click_events=2",
-    });
-
-    try testing.expectEqual(Screen.SemanticPrompt.SemanticClick{ .click_events = .relative }, t.screens.active.semantic_prompt.click);
+    try testing.expectEqual(.click_events, t.screens.active.semantic_prompt.click);
 }
 
 test "Terminal: OSC133A click_events=0 does not set click_events" {
@@ -12515,7 +12451,7 @@ test "Terminal: OSC133A click_events=1 takes priority over cl" {
     });
 
     // click_events should take priority
-    try testing.expectEqual(Screen.SemanticPrompt.SemanticClick{ .click_events = .absolute }, t.screens.active.semantic_prompt.click);
+    try testing.expectEqual(.click_events, t.screens.active.semantic_prompt.click);
 }
 
 test "Terminal: OSC133A click_events=0 falls back to cl" {
@@ -13246,36 +13182,4 @@ test "Terminal: deleteLines wide char at right margin with full clear" {
     // and the orphaned spacer_tail at col 39 triggers a page integrity
     // violation in clearCells.
     try t.scrollUp(t.rows);
-}
-
-test "Terminal: glyph APC stores session glossary entries" {
-    const alloc = testing.allocator;
-    var t = try init(alloc, .{ .cols = 80, .rows = 24 });
-    defer t.deinit(alloc);
-
-    var register_parser = glyph.CommandParser.init(alloc, 1024 * 1024);
-    defer register_parser.deinit();
-    for ("r;cp=e0a0;AAAAAAAAAAAAAA==") |byte| try register_parser.feed(byte);
-    var register_req = try register_parser.complete(alloc);
-    defer register_req.deinit(alloc);
-
-    try testing.expectEqual(glyph.Response{
-        .register = .{ .cp = 0xE0A0 },
-    }, t.glyphProtocol(alloc, &register_req).?);
-    try testing.expect(t.glyph_glossary.contains(0xE0A0));
-    try testing.expect(t.flags.dirty.glyph_glossary);
-
-    var query_parser = glyph.CommandParser.init(alloc, 1024 * 1024);
-    defer query_parser.deinit();
-    for ("q;cp=e0a0") |byte| try query_parser.feed(byte);
-    var query_req = try query_parser.complete(alloc);
-    defer query_req.deinit(alloc);
-
-    try testing.expectEqual(glyph.Response{ .query = .{
-        .cp = 0xE0A0,
-        .status = .{ .glossary = true },
-    } }, t.glyphProtocol(alloc, &query_req).?);
-
-    t.fullReset();
-    try testing.expect(!t.glyph_glossary.contains(0xE0A0));
 }
