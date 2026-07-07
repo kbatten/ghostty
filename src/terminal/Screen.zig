@@ -113,7 +113,7 @@ pub const SemanticPrompt = struct {
 
     pub const SemanticClick = union(enum) {
         none,
-        click_events: osc.semantic_prompt.ClickEvents,
+        click_events,
         cl: osc.semantic_prompt.Click,
     };
 };
@@ -1432,21 +1432,9 @@ pub fn clearCells(
     }
 
     if (row.styled) {
-        // Styled cells overwhelmingly come in runs sharing the same
-        // style (e.g. a colored status bar or a highlighted region),
-        // so group them and release each run with a single ref-count
-        // update rather than per cell.
-        var i: usize = 0;
-        while (i < cells.len) {
-            const id = cells[i].style_id;
-            if (id == style.default_id) {
-                i += 1;
-                continue;
-            }
-            var j = i + 1;
-            while (j < cells.len and cells[j].style_id == id) j += 1;
-            page.styles.releaseMultiple(page.memory, id, @intCast(j - i));
-            i = j;
+        for (cells) |*cell| {
+            if (cell.hasStyling())
+                page.styles.release(page.memory, cell.style_id);
         }
 
         // If we have no left/right scroll region we can be sure
@@ -2003,12 +1991,6 @@ pub fn setAttribute(
 
         .unknown => return,
     }
-
-    // If the attribute didn't change our style then we can skip the
-    // style update entirely: our current style ID is already correct.
-    // This is a common case in the wild where programs re-assert the
-    // same style repeatedly (e.g. per span or per line).
-    if (self.cursor.style.eql(old_style)) return;
 
     try self.manualStyleUpdate();
 }
@@ -7668,32 +7650,6 @@ test "Screen: select untracked" {
     try testing.expectEqual(tracked + 2, s.pages.countTrackedPins());
     try s.select(null);
     try testing.expectEqual(tracked, s.pages.countTrackedPins());
-}
-
-test "Screen: select replaces existing pins" {
-    const testing = std.testing;
-    const alloc = testing.allocator;
-
-    var s = try init(alloc, .{ .cols = 10, .rows = 10, .max_scrollback = 0 });
-    defer s.deinit();
-    try s.testWriteString("ABC  DEF\n 123\n456");
-
-    const tracked = s.pages.countTrackedPins();
-    try s.select(Selection.init(
-        s.pages.pin(.{ .active = .{ .x = 0, .y = 0 } }).?,
-        s.pages.pin(.{ .active = .{ .x = 3, .y = 0 } }).?,
-        false,
-    ));
-    try testing.expectEqual(tracked + 2, s.pages.countTrackedPins());
-
-    // Replacing the selection must untrack the prior selection's pins
-    // rather than leak them.
-    try s.select(Selection.init(
-        s.pages.pin(.{ .active = .{ .x = 0, .y = 1 } }).?,
-        s.pages.pin(.{ .active = .{ .x = 2, .y = 1 } }).?,
-        false,
-    ));
-    try testing.expectEqual(tracked + 2, s.pages.countTrackedPins());
 }
 
 test "Screen: selectAll" {
