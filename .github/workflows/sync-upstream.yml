@@ -40,6 +40,7 @@ env:
   DOWNSTREAM_FILES: >-
     .github/workflows/build-ghosttykit.yml
     .github/workflows/sync-upstream.yml
+    .github/workflows/assert-no-drift.yml
     .github/downstream/0001-command-wrapper.patch
 
 jobs:
