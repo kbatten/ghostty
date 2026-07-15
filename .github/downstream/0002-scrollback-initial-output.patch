@@ -1,0 +1,151 @@
+From b137f00a0e92fd449a79bdeb44a815366648cef6 Mon Sep 17 00:00:00 2001
+From: Keith Batten <kbatten@gmail.com>
+Date: Wed, 15 Jul 2026 14:10:42 -0700
+Subject: [PATCH] feat(capi): add initial-output to write scrollback on surface
+ create
+
+Adds an `initial-output` config option and the embedded C-ABI field
+`initial_output`. Unlike `input`/`initial_input`, this is not sent to
+the pty/program; it is fed through the terminal stream at termio
+thread-enter, before the backend (and read thread) start, so it lands
+in the scrollback deterministically ahead of any child process output
+and the child never sees it.
+
+This lets an embedder restore a previous session's scrollback into a
+new surface as inert display text, above the fresh shell prompt.
+---
+ include/ghostty.h      |  1 +
+ src/apprt/embedded.zig | 18 ++++++++++++++++++
+ src/config/Config.zig  | 11 +++++++++++
+ src/termio/Termio.zig  | 23 +++++++++++++++++++++--
+ 4 files changed, 51 insertions(+), 2 deletions(-)
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+index bcbd9d1fe..3483fbc30 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -480,6 +480,7 @@ typedef struct {
+   const char* const* command_wrapper;
+   size_t command_wrapper_count;
+   bool disable_shell_integration;
++  const char* initial_output;
+ } ghostty_surface_config_s;
+ 
+ typedef struct {
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index 77c5fcdca..f8c5c4d53 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -475,6 +475,14 @@ pub const Surface = struct {
+         /// (e.g. a script runner that emits its own OSC sequences) and must not
+         /// have Ghostty's integration injected into the shell.
+         disable_shell_integration: bool = false,
++
++        /// Output to write directly to the terminal display when the surface
++        /// is created, before the running command's own output. Unlike
++        /// `initial_input`, this is NOT sent to the pty/program; it is
++        /// processed as terminal output so it lands in the scrollback without
++        /// the child process ever seeing it. Used to restore a previous
++        /// session's scrollback.
++        initial_output: ?[*:0]const u8 = null,
+     };
+ 
+     pub fn init(self: *Surface, app: *App, opts: Options) !void {
+@@ -602,6 +610,16 @@ pub const Surface = struct {
+             );
+         }
+ 
++        // If we have initial output then set it. Unlike initial_input, this is
++        // written to the terminal display (not the pty) at startup, so it
++        // appears in the scrollback without the child process seeing it.
++        if (opts.initial_output) |c_output| {
++            const output = std.mem.sliceTo(c_output, 0);
++            if (output.len > 0) {
++                config.@"initial-output" = try config.arenaAlloc().dupe(u8, output);
++            }
++        }
++
+         // Wait after command
+         if (opts.wait_after_command) {
+             config.@"wait-after-command" = true;
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index c3bfdee53..6eb9c9c78 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1364,6 +1364,17 @@ env: RepeatableStringMap = .{},
+ /// Available since: 1.2.0
+ input: RepeatableReadableIO = .{},
+ 
++/// Output to write directly to the terminal display when a surface is
++/// created, before the running command's own output. Unlike `input`, this
++/// is NOT sent to the running program (the pty); it is processed as terminal
++/// output (escape sequences are honored, the cursor advances) so it appears
++/// in the scrollback without the child process ever seeing it. This is used
++/// by embedders (e.g. to restore a previous session's scrollback on startup)
++/// and is not typically set by end users.
++///
++/// Changing this configuration at runtime will only affect new terminals.
++@"initial-output": []const u8 = "",
++
+ /// If true, keep the terminal open after the command exits. Normally, the
+ /// terminal window closes when the running command (such as a shell) exits.
+ /// With this true, the terminal window will stay open until any keypress is
+diff --git a/src/termio/Termio.zig b/src/termio/Termio.zig
+index 1b08c5e9a..fc303b16f 100644
+--- a/src/termio/Termio.zig
++++ b/src/termio/Termio.zig
+@@ -81,12 +81,19 @@ const ThreadEnterState = struct {
+     /// if it fails, because Exec only starts once.
+     input: configpkg.io.RepeatableReadableIO,
+ 
++    /// Initial output to write to the terminal display (not the pty) before
++    /// the subprocess starts, so it lands in the scrollback deterministically
++    /// ahead of any child output. Empty means no initial output.
++    output: []const u8 = "",
++
+     pub fn create(
+         alloc: Allocator,
+         config: *const configpkg.Config,
+     ) !?*ThreadEnterState {
+-        // If we have no input then we have no thread enter state
+-        if (config.input.list.items.len == 0) return null;
++        // If we have neither initial input nor initial output then we have
++        // no thread enter state.
++        if (config.input.list.items.len == 0 and
++            config.@"initial-output".len == 0) return null;
+ 
+         // Create our arena allocator
+         var arena = ArenaAllocator.init(alloc);
+@@ -99,10 +106,14 @@ const ThreadEnterState = struct {
+         // Copy the input from the config
+         const input = try config.input.cloneParsed(arena_alloc);
+ 
++        // Copy the initial output from the config
++        const output = try arena_alloc.dupe(u8, config.@"initial-output");
++
+         // Return the initialized state
+         ptr.* = .{
+             .arena = arena,
+             .input = input,
++            .output = output,
+         };
+         return ptr;
+     }
+@@ -343,6 +354,14 @@ pub fn threadEnter(
+     else
+         null;
+ 
++    // Initial output is written to the terminal display now, before we start
++    // the backend (and thus the read thread). Because no child output can
++    // arrive until the backend starts, this deterministically lands in the
++    // scrollback ahead of the command's own output. It goes through the
++    // terminal stream (not the pty), so the child process never sees it.
++    const initial_output: []const u8 = if (self.thread_enter_state) |v| v.output else "";
++    if (initial_output.len > 0) self.processOutput(initial_output);
++
+     data.* = .{
+         .alloc = self.alloc,
+         .loop = &thread.loop,
+-- 
+2.55.0
+
