@@ -81,12 +81,19 @@ const ThreadEnterState = struct {
     /// if it fails, because Exec only starts once.
     input: configpkg.io.RepeatableReadableIO,
 
+    /// Initial output to write to the terminal display (not the pty) before
+    /// the subprocess starts, so it lands in the scrollback deterministically
+    /// ahead of any child output. Empty means no initial output.
+    output: []const u8 = "",
+
     pub fn create(
         alloc: Allocator,
         config: *const configpkg.Config,
     ) !?*ThreadEnterState {
-        // If we have no input then we have no thread enter state
-        if (config.input.list.items.len == 0) return null;
+        // If we have neither initial input nor initial output then we have
+        // no thread enter state.
+        if (config.input.list.items.len == 0 and
+            config.@"initial-output".len == 0) return null;
 
         // Create our arena allocator
         var arena = ArenaAllocator.init(alloc);
@@ -99,10 +106,14 @@ const ThreadEnterState = struct {
         // Copy the input from the config
         const input = try config.input.cloneParsed(arena_alloc);
 
+        // Copy the initial output from the config
+        const output = try arena_alloc.dupe(u8, config.@"initial-output");
+
         // Return the initialized state
         ptr.* = .{
             .arena = arena,
             .input = input,
+            .output = output,
         };
         return ptr;
     }
@@ -339,6 +350,33 @@ pub fn threadEnter(
         try v.prepareInput()
     else
         null;
+
+    // Hand initial output to the stream handler, which writes it when the child
+    // starts drawing its first prompt (see `StreamHandler.writeInitialOutput`).
+    //
+    // Writing it here instead — before the backend and its read thread start —
+    // is the obvious approach and it doesn't survive contact with a multiplexer:
+    // zmx and tmux open by claiming the screen with `ESC [ 2 J`, which erases
+    // the active area and takes the restore with it, losing its last `rows`
+    // lines or all of it when it's shorter than the grid. Getting it out of
+    // reach first (scrolling it into the scrollback, or marking it as a prompt
+    // so the erase's own #905 path scrolls it) does save every line, but then
+    // the erase leaves an empty active area and the shell draws its prompt on
+    // the top line of a blank screen, with the restore stranded above the
+    // viewport. Waiting for the prompt sidesteps the whole fight: by then the
+    // erase has happened, and the restore lands directly above a prompt that
+    // stays where the user expects it.
+    //
+    // The copy outlives the thread enter state's arena, so the handler owns it.
+    const initial_output: []const u8 = if (self.thread_enter_state) |v| v.output else "";
+    if (initial_output.len > 0) {
+        self.terminal_stream.handler.pending_initial_output =
+            self.alloc.dupe(u8, initial_output) catch |err| blk: {
+                log.warn("failed to hold initial output err={}", .{err});
+                break :blk null;
+            };
+    }
+
 
     data.* = .{
         .alloc = self.alloc,

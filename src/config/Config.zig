@@ -1352,6 +1352,17 @@ env: RepeatableStringMap = .{},
 /// Available since: 1.2.0
 input: RepeatableReadableIO = .{},
 
+/// Output to write directly to the terminal display when a surface is
+/// created, before the running command's own output. Unlike `input`, this
+/// is NOT sent to the running program (the pty); it is processed as terminal
+/// output (escape sequences are honored, the cursor advances) so it appears
+/// in the scrollback without the child process ever seeing it. This is used
+/// by embedders (e.g. to restore a previous session's scrollback on startup)
+/// and is not typically set by end users.
+///
+/// Changing this configuration at runtime will only affect new terminals.
+@"initial-output": []const u8 = "",
+
 /// If true, keep the terminal open after the command exits. Normally, the
 /// terminal window closes when the running command (such as a shell) exits.
 /// With this true, the terminal window will stay open until any keypress is

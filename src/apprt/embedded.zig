@@ -475,6 +475,14 @@ pub const Surface = struct {
         /// (e.g. a script runner that emits its own OSC sequences) and must not
         /// have Ghostty's integration injected into the shell.
         disable_shell_integration: bool = false,
+
+        /// Output to write directly to the terminal display when the surface
+        /// is created, before the running command's own output. Unlike
+        /// `initial_input`, this is NOT sent to the pty/program; it is
+        /// processed as terminal output so it lands in the scrollback without
+        /// the child process ever seeing it. Used to restore a previous
+        /// session's scrollback.
+        initial_output: ?[*:0]const u8 = null,
     };
 
     pub fn init(self: *Surface, app: *App, opts: Options) !void {
@@ -600,6 +608,16 @@ pub const Surface = struct {
                 alloc,
                 .{ .raw = try buf.toOwnedSliceSentinel(0) },
             );
+        }
+
+        // If we have initial output then set it. Unlike initial_input, this is
+        // written to the terminal display (not the pty) at startup, so it
+        // appears in the scrollback without the child process seeing it.
+        if (opts.initial_output) |c_output| {
+            const output = std.mem.sliceTo(c_output, 0);
+            if (output.len > 0) {
+                config.@"initial-output" = try config.arenaAlloc().dupe(u8, output);
+            }
         }
 
         // Wait after command

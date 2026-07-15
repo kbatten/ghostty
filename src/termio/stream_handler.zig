@@ -76,6 +76,12 @@ pub const StreamHandler = struct {
     /// this to determine if we need to default the window title.
     seen_title: bool = false,
 
+    /// Initial output to write the moment the child starts drawing its first
+    /// prompt — before any of that prompt's own output is parsed, so it lands
+    /// above it. Owned by `alloc`; taken (set to null) once written. See
+    /// `Termio.writePendingInitialOutput` for why this is the only safe moment.
+    pending_initial_output: ?[]const u8 = null,
+
     pub const Stream = terminal.Stream(StreamHandler);
 
     /// True if we have tmux control mode built in.
@@ -84,6 +90,8 @@ pub const StreamHandler = struct {
     pub fn deinit(self: *StreamHandler) void {
         self.apc.deinit();
         self.dcs.deinit();
+        // Initial output we held but never wrote (no prompt ever arrived).
+        if (self.pending_initial_output) |v| self.alloc.free(v);
         if (comptime tmux_enabled) tmux: {
             const viewer = self.tmux_viewer orelse break :tmux;
             viewer.deinit();
@@ -1035,10 +1043,52 @@ pub const StreamHandler = struct {
         });
     }
 
+    /// Write held initial output — a previous session's scrollback, replayed so
+    /// a reopened surface comes back with context above its fresh prompt.
+    ///
+    /// Printed straight to the terminal rather than fed back through the stream:
+    /// the stream owns this handler, so a handler can't re-enter it. That's why
+    /// the text is plain (the embedder sends no escapes) and the styling is
+    /// applied here — restored text is inert history, so it's dimmed to set it
+    /// apart from live output.
+    fn writeInitialOutput(self: *StreamHandler) void {
+        const output = self.pending_initial_output orelse return;
+        self.pending_initial_output = null;
+        defer self.alloc.free(output);
+
+        const t = self.terminal;
+        t.setAttribute(.{ .faint = {} }) catch {};
+        defer t.setAttribute(.{ .unset = {} }) catch {};
+
+        // printString handles \n as CR+LF, so the embedder doesn't have to
+        // pre-CRLF the text to avoid staircasing.
+        t.printString(output) catch |err| {
+            log.warn("failed to write initial output err={}", .{err});
+            return;
+        };
+
+        // Leave the cursor on a fresh line so the prompt starts below us.
+        if (t.screens.active.cursor.x > 0) {
+            t.carriageReturn();
+            t.linefeed() catch {};
+        }
+    }
+
     fn semanticPrompt(
         self: *StreamHandler,
         cmd: Stream.Action.SemanticPrompt,
     ) !void {
+        // A prompt is starting: the child is past its startup (and past any
+        // screen-clearing a multiplexer did on the way) but hasn't drawn the
+        // prompt itself yet. That's the one moment we can write held initial
+        // output and have it land ABOVE the prompt.
+        switch (cmd.action) {
+            .prompt_start,
+            .fresh_line_new_prompt,
+            => self.writeInitialOutput(),
+            else => {},
+        }
+
         switch (cmd.action) {
             .end_input_start_output => {
                 self.surfaceMessageWriter(.start_command);
