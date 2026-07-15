@@ -81,12 +81,19 @@ const ThreadEnterState = struct {
     /// if it fails, because Exec only starts once.
     input: configpkg.io.RepeatableReadableIO,
 
+    /// Initial output to write to the terminal display (not the pty) before
+    /// the subprocess starts, so it lands in the scrollback deterministically
+    /// ahead of any child output. Empty means no initial output.
+    output: []const u8 = "",
+
     pub fn create(
         alloc: Allocator,
         config: *const configpkg.Config,
     ) !?*ThreadEnterState {
-        // If we have no input then we have no thread enter state
-        if (config.input.list.items.len == 0) return null;
+        // If we have neither initial input nor initial output then we have
+        // no thread enter state.
+        if (config.input.list.items.len == 0 and
+            config.@"initial-output".len == 0) return null;
 
         // Create our arena allocator
         var arena = ArenaAllocator.init(alloc);
@@ -99,10 +106,14 @@ const ThreadEnterState = struct {
         // Copy the input from the config
         const input = try config.input.cloneParsed(arena_alloc);
 
+        // Copy the initial output from the config
+        const output = try arena_alloc.dupe(u8, config.@"initial-output");
+
         // Return the initialized state
         ptr.* = .{
             .arena = arena,
             .input = input,
+            .output = output,
         };
         return ptr;
     }
@@ -342,6 +353,14 @@ pub fn threadEnter(
         try v.prepareInput()
     else
         null;
+
+    // Initial output is written to the terminal display now, before we start
+    // the backend (and thus the read thread). Because no child output can
+    // arrive until the backend starts, this deterministically lands in the
+    // scrollback ahead of the command's own output. It goes through the
+    // terminal stream (not the pty), so the child process never sees it.
+    const initial_output: []const u8 = if (self.thread_enter_state) |v| v.output else "";
+    if (initial_output.len > 0) self.processOutput(initial_output);
 
     data.* = .{
         .alloc = self.alloc,

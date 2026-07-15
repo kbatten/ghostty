@@ -480,6 +480,7 @@ typedef struct {
   const char* const* command_wrapper;
   size_t command_wrapper_count;
   bool disable_shell_integration;
+  const char* initial_output;
 } ghostty_surface_config_s;
 
 typedef struct {
